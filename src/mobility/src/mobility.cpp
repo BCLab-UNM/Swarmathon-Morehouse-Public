@@ -441,7 +441,7 @@ void joyCmdHandler(const geometry_msgs::Twist::ConstPtr& message) {
 void publishStatusTimerEventHandler(const ros::TimerEvent&)
 {
   std_msgs::String msg;
-  msg.data = "online";
+  msg.data = "Morehouse";
   status_publisher.publish(msg);
 }
 
