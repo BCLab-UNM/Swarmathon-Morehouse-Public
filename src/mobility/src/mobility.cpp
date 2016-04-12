@@ -15,6 +15,9 @@
 #include <geometry_msgs/Twist.h>
 #include <nav_msgs/Odometry.h>
 
+//Custom messages
+#include <shared_messages/TagsImage.h>
+
 // To handle shutdown signals so the node quits properly in response to "rosnode kill"
 #include <ros/ros.h>
 #include <signal.h>
@@ -37,6 +40,14 @@ float killSwitchTimeout = 10;
 std_msgs::Int16 targetDetected; //ID of the detected target
 bool targetsCollected [256] = {0}; //array of booleans indicating whether each target ID has been found
 
+//Terrell variables
+double returnLocation_theta;
+double returnLocation_x;
+double returnLocation_y;
+int tagCheck;
+#define TRUE	1
+#define	FALSE	0
+
 // state machine states
 #define STATE_MACHINE_TRANSFORM	0
 #define STATE_MACHINE_ROTATE	1
@@ -53,6 +64,8 @@ ros::Publisher velocityPublish;
 ros::Publisher stateMachinePublish;
 ros::Publisher status_publisher;
 ros::Publisher targetCollectedPublish;
+ros::Publisher targetPickUpPublish;
+ros::Publisher targetDropOffPublish;
 
 //Subscribers
 ros::Subscriber joySubscriber;
@@ -73,7 +86,7 @@ void sigintEventHandler(int signal);
 //Callback handlers
 void joyCmdHandler(const geometry_msgs::Twist::ConstPtr& message);
 void modeHandler(const std_msgs::UInt8::ConstPtr& message);
-void targetHandler(const std_msgs::Int16::ConstPtr& tagInfo);
+void targetHandler(const shared_messages::TagsImage::ConstPtr& tagInfo);
 void obstacleHandler(const std_msgs::UInt8::ConstPtr& message);
 void odometryHandler(const nav_msgs::Odometry::ConstPtr& message);
 void mobilityStateMachine(const ros::TimerEvent&);
@@ -120,9 +133,11 @@ int main(int argc, char **argv) {
     velocityPublish = mNH.advertise<geometry_msgs::Twist>((publishedName + "/velocity"), 10);
     stateMachinePublish = mNH.advertise<std_msgs::String>((publishedName + "/state_machine"), 1, true);
     targetCollectedPublish = mNH.advertise<std_msgs::Int16>(("targetsCollected"), 1, true);
+    targetPickUpPublish = mNH.advertise<sensor_msgs::Image>((publishedName + "/targetPickUpImage"), 1, true);
+    targetDropOffPublish = mNH.advertise<sensor_msgs::Image>((publishedName + "/targetDropOffImage"), 1, true);
 
     publish_status_timer = mNH.createTimer(ros::Duration(status_publish_interval), publishStatusTimerEventHandler);
-    killSwitchTimer = mNH.createTimer(ros::Duration(killSwitchTimeout), killSwitchTimerEventHandler);
+    //killSwitchTimer = mNH.createTimer(ros::Duration(killSwitchTimeout), killSwitchTimerEventHandler);
     stateMachineTimer = mNH.createTimer(ros::Duration(mobilityLoopTimeStep), mobilityStateMachine);
     
     ros::spin();
@@ -151,8 +166,13 @@ void mobilityStateMachine(const ros::TimerEvent&) {
 				}
 				//If returning with a target
 				else if (targetDetected.data != -1) {
+					//Set the x and y coordinates and angle to return to
+					returnLocation_x = currentLocation.x;
+					returnLocation_y = currentLocation.y;
+					returnLocation_theta = atan2(currentLocation.y, currentLocation.x);
+					
 					//If goal has not yet been reached
-					if (hypot(0.0 - currentLocation.x, 0.0 - currentLocation.y) > 0.5) {
+					if (hypot(0.0 - currentLocation.x, 0.0 - currentLocation.y) > 0.2) {
 				        //set angle to center as goal heading
 						goalLocation.theta = M_PI + atan2(currentLocation.y, currentLocation.x);
 						
@@ -163,7 +183,8 @@ void mobilityStateMachine(const ros::TimerEvent&) {
 					//Otherwise, reset target and select new random uniform heading
 					else {
 						targetDetected.data = -1;
-						goalLocation.theta = rng->uniformReal(0, 2 * M_PI);
+						//goalLocation.theta = rng->uniformReal(0, 2 * M_PI);
+						goalLocation.theta = atan2(returnLocation_y, returnLocation_x);
 					}
 				}
 				//Otherwise, assign a new goal
@@ -172,8 +193,8 @@ void mobilityStateMachine(const ros::TimerEvent&) {
 					goalLocation.theta = rng->gaussian(currentLocation.theta, 0.25);
 					
 					//select new position 50 cm from current location
-					goalLocation.x = currentLocation.x + (0.5 * cos(goalLocation.theta));
-					goalLocation.y = currentLocation.y + (0.5 * sin(goalLocation.theta));
+					goalLocation.x = currentLocation.x + (5.0 * cos(goalLocation.theta));
+					goalLocation.y = currentLocation.y + (5.0 * sin(goalLocation.theta));
 				}
 				
 				//Purposefully fall through to next case without breaking
@@ -185,10 +206,10 @@ void mobilityStateMachine(const ros::TimerEvent&) {
 			case STATE_MACHINE_ROTATE: {
 				stateMachineMsg.data = "ROTATING";
 			    if (angles::shortest_angular_distance(currentLocation.theta, goalLocation.theta) > 0.1) {
-					setVelocity(0.0, 0.2); //rotate left
+					setVelocity(0.0, 0.3); //rotate left
 			    }
 			    else if (angles::shortest_angular_distance(currentLocation.theta, goalLocation.theta) < -0.1) {
-					setVelocity(0.0, -0.2); //rotate right
+					setVelocity(0.0, -0.3); //rotate right
 				}
 				else {
 					setVelocity(0.0, 0.0); //stop
@@ -236,8 +257,8 @@ void setVelocity(double linearVel, double angularVel)
   // Stopping and starting the timer causes it to start counting from 0 again.
   // As long as this is called before the kill swith timer reaches killSwitchTimeout seconds
   // the rover's kill switch wont be called.
-  //killSwitchTimer.stop();
-  //killSwitchTimer.start();
+  killSwitchTimer.stop();
+  killSwitchTimer.start();
   
   velocity.linear.x = linearVel * 1.5;
   velocity.angular.z = angularVel * 8; //scaling factor for sim; removed by aBridge node
@@ -246,30 +267,127 @@ void setVelocity(double linearVel, double angularVel)
 
 /***********************
  * ROS CALLBACK HANDLERS
- ************************/
+ //************************/
 
-void targetHandler(const std_msgs::Int16::ConstPtr& message) {
-	//if target has not previously been detected 
-    if (targetDetected.data == -1) {
-        targetDetected = *message;
+//void targetHandler(const shared_messages::TagsImage::ConstPtr& message) {
+
+	////if this is the goal target
+	//if (message->tags.data[0] == 256) {
+		////if we were returning with a target
+	    //if (targetDetected.data != -1) {
+			////publish to scoring code
+			//targetDropOffPublish.publish(message->image);
+			//targetDetected.data = -1;
+	    //}
+	//}
+
+	////if target has not previously been detected 
+	//else if (targetDetected.data == -1) {
         
-        //check if target has not yet been collected
-        if (!targetsCollected[targetDetected.data]) { 
-	        //set angle to center as goal heading
-			goalLocation.theta = M_PI + atan2(currentLocation.y, currentLocation.x);
+        ////check if target has not yet been collected
+        //if (!targetsCollected[message->tags.data[0]]) {
+			////copy target ID to class variable
+			//targetDetected.data = message->tags.data[0];
 			
-			//set center as goal position
-			goalLocation.x = 0.0;
-			goalLocation.y = 0.0;
+	        ////set angle to center as goal heading
+			//goalLocation.theta = M_PI + atan2(currentLocation.y, currentLocation.x);
 			
-			//publish detected target
-			targetCollectedPublish.publish(targetDetected);
+			////set center as goal position
+			//goalLocation.x = 0.0;
+			//goalLocation.y = 0.0;
 			
-			//switch to transform state to trigger return to center
+			////publish detected target
+			//targetCollectedPublish.publish(targetDetected);
+
+			////publish to scoring code
+			//targetPickUpPublish.publish(message->image);
+
+			////switch to transform state to trigger return to center
+			//stateMachineState = STATE_MACHINE_TRANSFORM;
+		//}
+    //}
+//}
+
+/***********************************************************************
+*                      Function: targetHandler                         *
+* Description: This function will control the rovers movement while it *
+* is searching for April Tags. 										   *
+* 																	   *
+* Objectives:														   *
+* 1. The rover encounters an April Tag								   *
+* 2. Determines whether the tag has been detected before and publish   *
+* 3. Set return location and travel to center to score tag			   *
+* 4. Return to previous location to check for another tag			   *
+* 5. Repeat steps until no more tags are found.						   * 
+*		
+***********************************************************************/
+
+void targetHandler(const shared_messages::TagsImage::ConstPtr& message)
+{
+
+	//if this is the goal target
+	if (message->tags.data[0] == 256) 
+	{
+		//Set the x and y coordinates and angle to return to
+		returnLocation_x = currentLocation.x;
+		returnLocation_y = currentLocation.y;
+		returnLocation_theta = atan2(currentLocation.y, currentLocation.x);
+		
+		//if we were returning with a target
+		if (targetDetected.data != -1) {
+			//publish to scoring code
+			targetDropOffPublish.publish(message->image);
+			targetDetected.data = -1;
+			
+			//After scoring the tag, return to previous position to check for more tags
+			goalLocation.x = returnLocation_x;
+			goalLocation.y = returnLocation_y;  
+			
+			//set angle to return to previous position
+			goalLocation.theta = returnLocation_theta;
+			
 			stateMachineState = STATE_MACHINE_TRANSFORM;
+			
+			while (currentLocation.x != returnLocation_x and currentLocation.y != returnLocation_y)
+			{
+				stateMachineState =  STATE_MACHINE_TRANSFORM;
+				
+				while (atan2(currentLocation.y, currentLocation.x) != returnLocation_theta)
+				{
+					stateMachineState = STATE_MACHINE_ROTATE;	
+				}
+			}
 		}
-    }
+	}
+
+	//if target has not previously been detected 
+	else if (targetDetected.data == -1) 
+	{
+		targetDetected.data = message->tags.data[0];
+
+		//check if target has not yet been collected
+		if (!targetsCollected[message->tags.data[0]]) {
+			//copy target ID to class variable
+			targetDetected.data = message->tags.data[0];
+		}
+		//set angle to center as goal heading
+		goalLocation.theta = M_PI + atan2(currentLocation.y, currentLocation.x);
+
+		//set center as goal position
+		goalLocation.x = 0.0;
+		goalLocation.y = 0.0;
+
+		//switch to transform state to trigger return to center
+		stateMachineState = STATE_MACHINE_TRANSFORM;
+
+		//publish detected target
+		targetCollectedPublish.publish(targetDetected);
+
+		//publish to scoring code
+		targetPickUpPublish.publish(message->image);
+	}
 }
+
 
 void modeHandler(const std_msgs::UInt8::ConstPtr& message) {
 	currentMode = message->data;
