@@ -7,12 +7,11 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   std_msgs
   random_numbers
-  message_generation
-  shared_messages
+  tf
 )
 
 catkin_package(
-  CATKIN_DEPENDS geometry_msgs roscpp sensor_msgs std_msgs random_numbers message_runtime shared_messages
+  CATKIN_DEPENDS geometry_msgs roscpp sensor_msgs std_msgs random_numbers tf
 )
 
 include_directories(
@@ -20,7 +19,11 @@ include_directories(
 )
 
 add_executable(
-  mobility src/mobility.cpp
+  mobility 
+  src/PickUpController.cpp
+  src/DropOffController.cpp
+  src/SearchController.cpp
+  src/mobility.cpp
 )
 
 add_dependencies(mobility ${catkin_EXPORTED_TARGETS})
