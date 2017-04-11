@@ -776,7 +776,7 @@ void joyCmdHandler(const sensor_msgs::Joy::ConstPtr& message) {
 
 void publishStatusTimerEventHandler(const ros::TimerEvent&) {
     std_msgs::String msg;
-    msg.data = "online";
+    msg.data = "Morehouse";
     status_publisher.publish(msg);
 }
 
