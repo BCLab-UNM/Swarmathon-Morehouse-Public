@@ -4,6 +4,11 @@ project(rqt_rover_gui)
 set(CMAKE_BUILD_TYPE Debug)
 
 #Get version info from git and pass it into compiled code
+execute_process(COMMAND git rev-parse --abbrev-ref HEAD
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_BRANCH)
+string(STRIP "${GIT_BRANCH}" GIT_BRANCH)
+
 execute_process(COMMAND git describe --tags --abbrev=0
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
     OUTPUT_VARIABLE GIT_VERSION)
@@ -23,6 +28,9 @@ find_package(catkin REQUIRED COMPONENTS
   rqt_gui_cpp
   cv_bridge
   image_transport
+  geometry_msgs
+  ublox_msgs
+  ublox_serialization
 )
 
 find_package(Qt4 REQUIRED COMPONENTS
@@ -37,7 +45,7 @@ link_directories(${GAZEBO_LIBRARY_DIRS})
 #list(APPEND CMAKE_CXX_FLAGS "${GAZEBO_CXX_FLAGS}")
 
 catkin_package(
-  CATKIN_DEPENDS rqt_gui rqt_gui_cpp cv_bridge image_transport
+  CATKIN_DEPENDS rqt_gui rqt_gui_cpp cv_bridge image_transport geometry_msgs
 )
 
 SET(rover_gui_plugin_RESOURCES resources/resources.qrc)
@@ -52,7 +60,7 @@ qt4_wrap_cpp(
   src/USFrame.h
   src/GPSFrame.h
   src/IMUFrame.h
-  #src/IMUWidget.h
+  src/JoystickGripperInterface.h
 )
 
 qt4_wrap_ui(
@@ -78,12 +86,13 @@ add_library(
   rqt_rover_gui
   ${version_file}
   src/GazeboSimManager.cpp
+  src/JoystickGripperInterface.cpp
   src/rover_gui_plugin.cpp
   src/CameraFrame.cpp
   src/MapFrame.cpp
   src/USFrame.cpp
   src/GPSFrame.cpp
-  #src/IMUWidget.cpp
+  src/MapData.cpp
   src/IMUFrame.cpp
   src/BWTabWidget.cpp
   ${rover_gui_plugin_RESOURCES}
@@ -92,9 +101,13 @@ add_library(
   ${OpenCV_LIBS}
 )
 
+add_dependencies(
+  rqt_rover_gui ${catkin_EXPORTED_TARGETS}
+  ${ublox_msgs_EXPORTED_TARGETS}
+)
+
 target_link_libraries(
   rqt_rover_gui
-  libapriltag.a	
   ${GAZEBO_libraries}
   ${catkin_LIBRARIES}
 )
